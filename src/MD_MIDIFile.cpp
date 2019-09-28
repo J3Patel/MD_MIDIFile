@@ -376,7 +376,7 @@ int MD_MIDIFile::load()
   return(-1);
 }
 
-#if DUMP_DATA
+
 void MD_MIDIFile::dump(void)
 {
   DUMP("\nFile Name:\t", getFilename());
@@ -395,4 +395,4 @@ void MD_MIDIFile::dump(void)
     DUMPS("\n");
   }
 }
-#endif // DUMP_DATA
+

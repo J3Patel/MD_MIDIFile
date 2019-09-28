@@ -95,12 +95,12 @@ bool MD_MFTrack::getNextEvent(MD_MIDIFile *mf, uint16_t tickCount)
   // passed for the event to be active.
   deltaT = readVarLen(&mf->_fd);
 
-  // If not enough ticks, just return without saving the file pointer and 
+  // If not enough ticks, just return without saving the file pointer and
   // we will go back to the same spot next time.
   if (_elapsedTicks < deltaT)
     return(false);
 
-  // Adjust the total elapsed time to the error against actual DeltaT to avoid 
+  // Adjust the total elapsed time to the error against actual DeltaT to avoid
   // accumulation of errors, as we only check for _elapsedTicks being >= ticks,
   // giving positive biased errors every time.
   _elapsedTicks -= deltaT;
@@ -109,19 +109,19 @@ bool MD_MFTrack::getNextEvent(MD_MIDIFile *mf, uint16_t tickCount)
   DUMP(" + ", _elapsedTicks);
   DUMPS("\t");
 
-  parseEvent(mf);
+  parseEvent(mf, deltaT);
 
   // remember the offset for next time
   _currOffset = mf->_fd.curPosition() - _startOffset;
 
-  // catch end of track when there is no META event  
+  // catch end of track when there is no META event
   _endOfTrack = _endOfTrack || (_currOffset >= _length);
   if (_endOfTrack) DUMPS(" - OUT OF TRACK");
 
   return(true);
 }
 
-void MD_MFTrack::parseEvent(MD_MIDIFile *mf)
+void MD_MFTrack::parseEvent(MD_MIDIFile *mf, uint32_t deltaT)
 // process the event from the physical file
 {
   uint8_t eType;
@@ -135,20 +135,23 @@ void MD_MFTrack::parseEvent(MD_MIDIFile *mf)
 // ---------------------------- MIDI
     // midi_event = any MIDI channel message, including running status
     // Midi events (status bytes 0x8n - 0xEn) The standard Channel MIDI messages, where 'n' is the MIDI channel (0 - 15).
-    // This status byte will be followed by 1 or 2 data bytes, as is usual for the particular MIDI message. 
+    // This status byte will be followed by 1 or 2 data bytes, as is usual for the particular MIDI message.
     // Any valid Channel MIDI message can be included in a MIDI file.
   case 0x80 ... 0xBf: // MIDI message with 2 parameters
   case 0xe0 ... 0xef:
-    _mev.size = 3;
+    _mev.size = 4;
     _mev.data[0] = eType;
     _mev.channel = _mev.data[0] & 0xf;  // mask off the channel
     _mev.data[0] = _mev.data[0] & 0xf0; // just the command byte
     _mev.data[1] = mf->_fd.read();
     _mev.data[2] = mf->_fd.read();
+    _mev.data[3] = deltaT;
     DUMP("[MID2] Ch: ", _mev.channel);
+    DUMP(" + ", deltaT);
     DUMPX(" Data: ", _mev.data[0]);
     DUMPX(" ", _mev.data[1]);
     DUMPX(" ", _mev.data[2]);
+    DUMPX(" ", _mev.data[3]);
 #if !DUMP_DATA
     if (mf->_midiHandler != nullptr)
       (mf->_midiHandler)(&_mev);
@@ -173,20 +176,20 @@ void MD_MFTrack::parseEvent(MD_MIDIFile *mf)
 
   case 0x00 ... 0x7f: // MIDI run on message
   {
-    // If the first (status) byte is less than 128 (0x80), this implies that MIDI 
-    // running status is in effect, and that this byte is actually the first data byte 
-    // (the status carrying over from the previous MIDI event). 
-    // This can only be the case if the immediately previous event was also a MIDI event, 
-    // ie SysEx and Meta events clear running status. This means that the _mev structure 
-    // should contain the info from the previous message in the structure's channel member 
-    // and data[0] (for the MIDI command). 
-    // Hence start saving the data at byte data[1] with the byte we have just read (eType) 
+    // If the first (status) byte is less than 128 (0x80), this implies that MIDI
+    // running status is in effect, and that this byte is actually the first data byte
+    // (the status carrying over from the previous MIDI event).
+    // This can only be the case if the immediately previous event was also a MIDI event,
+    // ie SysEx and Meta events clear running status. This means that the _mev structure
+    // should contain the info from the previous message in the structure's channel member
+    // and data[0] (for the MIDI command).
+    // Hence start saving the data at byte data[1] with the byte we have just read (eType)
     // and use the size member to determine how large the message is (ie, same as before).
     _mev.data[1] = eType;
     for (uint8_t i = 2; i < _mev.size; i++)
     {
       _mev.data[i] = mf->_fd.read();  // next byte
-    } 
+    }
 
     DUMP("[MID+] Ch: ", _mev.channel);
     DUMPS(" Data:");
@@ -203,8 +206,8 @@ void MD_MFTrack::parseEvent(MD_MIDIFile *mf)
   break;
 
 // ---------------------------- SYSEX
-  case 0xf0:  // sysex_event = 0xF0 + <len:1> + <data_bytes> + 0xF7 
-  case 0xf7:  // sysex_event = 0xF7 + <len:1> + <data_bytes> + 0xF7 
+  case 0xf0:  // sysex_event = 0xF0 + <len:1> + <data_bytes> + 0xF7
+  case 0xf7:  // sysex_event = 0xF7 + <len:1> + <data_bytes> + 0xF7
   {
     sysex_event sev;
     uint16_t index = 0;
@@ -269,13 +272,13 @@ void MD_MFTrack::parseEvent(MD_MIDIFile *mf)
       case 0x51:  // set Tempo - really the microseconds per tick
       {
         uint32_t value = readMultiByte(&mf->_fd, MB_TRYTE);
-        
+
         mf->setMicrosecondPerQuarterNote(value);
-        
+
         mev.data[0] = (value >> 16) & 0xFF;
         mev.data[1] = (value >> 8) & 0xFF;
         mev.data[2] = value & 0xFF;
-        
+
         DUMP("SET TEMPO to ", mf->getTickTime());
         DUMP(" us/tick or ", mf->getTempo());
         DUMPS(" beats/min");
@@ -286,7 +289,7 @@ void MD_MFTrack::parseEvent(MD_MIDIFile *mf)
       {
         uint8_t n = mf->_fd.read();
         uint8_t d = mf->_fd.read();
-        
+
         mf->setTimeSignature(n, 1 << d);  // denominator is 2^n
         mf->_fd.seekCur(mLen - 2);
 
@@ -307,7 +310,7 @@ void MD_MFTrack::parseEvent(MD_MIDIFile *mf)
         uint8_t mi = mf->_fd.read();
         const char* aaa[] = {"Cb", "Gb", "Db", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E", "B", "F#", "C#", "G#", "D#", "A#"};
 
-        if (sf >= -7 && sf <= 7) 
+        if (sf >= -7 && sf <= 7)
         {
           switch(mi)
           {
@@ -415,7 +418,7 @@ void MD_MFTrack::parseEvent(MD_MIDIFile *mf)
       default:
       {
         uint8_t minLen = min(ARRAY_SIZE(mev.data), mLen);
-        
+
         for (uint8_t i = 0; i < minLen; ++i)
           mev.data[i] = mf->_fd.read(); // read next
 
@@ -430,7 +433,7 @@ void MD_MFTrack::parseEvent(MD_MIDIFile *mf)
       (mf->_metaHandler)(&mev);
   }
   break;
-  
+
 // ---------------------------- UNKNOWN
   default:
     // stop playing this track as we cannot identify the eType
@@ -448,12 +451,12 @@ int MD_MFTrack::load(uint8_t trackId, MD_MIDIFile *mf)
 
   // save the trackid for use later
   _trackId = _mev.track = trackId;
-  
+
   // Read the Track header
   // track_chunk = "MTrk" + <length:4> + <track_event> [+ <track_event> ...]
   {
     char    h[MTRK_HDR_SIZE+1]; // Header characters + nul
-  
+
     mf->_fd.fgets(h, MTRK_HDR_SIZE+1);
     h[MTRK_HDR_SIZE] = '\0';
 
@@ -461,7 +464,7 @@ int MD_MFTrack::load(uint8_t trackId, MD_MIDIFile *mf)
       return(0);
   }
 
-  // Row read track chunk size and in bytes. This is not really necessary 
+  // Row read track chunk size and in bytes. This is not really necessary
   // since the track MUST end with an end of track meta event.
   dat32 = readMultiByte(&mf->_fd, MB_LONG);
   _length = dat32;
@@ -488,4 +491,3 @@ void MD_MFTrack::dump(void)
   DUMP("\nCurrent buffer offset:\t", _currOffset);
 }
 #endif // DUMP_DATA
-
